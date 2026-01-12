@@ -1,0 +1,434 @@
+---
+title: "2022 Tropical Plots"
+output: html_document
+date: "2025-12-11"
+---
+
+## Code is from Liz Suter's notebook (<https://github.com/lizsuter/shirp-edna/blob/main/2024-eDNA-plots.nb.Rmd>) modified for 2022 mifish tropical samples
+
+# Load packages
+
+library(tidyverse) 
+library(phyloseq) 
+library(vegan)
+library(RColorBrewer) 
+library(microbiome) 
+library(metagMisc)
+library(fantaxtic) 
+library(ggrepel) 
+library(paletteer) 
+library(pals)
+library(compositions) 
+library(hms) 
+library(ggvegan)
+
+
+
+# Import cleaned up data tables
+
+asv_count_mifish <- read.csv("//Volumes/NB_2/filtered_eDNA_data/2022_mifish/mifish_2022_glommed_asv_table.csv", header=TRUE, stringsAsFactors=FALSE)
+row.names(asv_count_mifish) <- asv_count_mifish$X
+asv_count_mifish <- asv_count_mifish %>% select(-X)
+asv_count_mifish_mat <- as.matrix(asv_count_mifish)
+
+asv_taxonomy_mifish <- read.csv("/Volumes/NB_2/filtered_eDNA_data/2022_mifish/mifish_2022_glommed_tax_table.csv", header=TRUE, stringsAsFactors=FALSE)
+row.names(asv_taxonomy_mifish) <- asv_taxonomy_mifish$X1stRepresentative_ASV
+asv_taxonomy_mifish <- asv_taxonomy_mifish %>% select(-X1stRepresentative_ASV)
+asv_taxonomy_mifish_mat <- as.matrix(asv_taxonomy_mifish)
+
+sample_metadata_mifish <- read.csv("/Volumes/NB_2/filtered_eDNA_data/2022_mifish/mifish_2022_sample_data.csv", header=TRUE, stringsAsFactors=TRUE)
+row.names(sample_metadata_mifish) <- sample_metadata_mifish$X
+sample_metadata_mifish <- sample_metadata_mifish %>% select(-X)
+
+ASV_2022_mifish = otu_table(asv_count_mifish_mat, taxa_are_rows = TRUE)
+TAX_2022_mifish = tax_table(asv_taxonomy_mifish_mat) 
+samples_2022_mifish = sample_data(sample_metadata_mifish)
+
+phylo_2022_mifish <- phyloseq(ASV_2022_mifish, TAX_2022_mifish, samples_2022_mifish)
+
+## Common names
+# Import common names database and set color scheme
+
+commonnames <- read_csv(file = "/Volumes/NB_2/filtered_eDNA_data/eDNA_databases/commonnames.csv")
+
+myColors_sciname <- setNames(commonnames$Color, commonnames$Taxon)
+myColors_comname <- setNames(commonnames$Color, commonnames$CommonName)
+myColors_Sci_comname <- setNames(commonnames$Color, commonnames$Taxon.CommonName)
+
+head(myColors_sciname) 
+head(myColors_comname) 
+head(myColors_Sci_comname)
+
+## Plots
+### Prepare data
+## Remove pos controls, glom by Taxon.CommonName, and convert to dataframe
+
+phylo_2022_mifish_glommed <- tax_glom(phylo_2022_mifish, "Taxon.CommonName")
+mifish_df <- subset_samples(phylo_2022_mifish_glommed)
+mifish_df <- psmelt(mifish_df)
+
+# relative abund ps object
+
+phylo_2022_mifish_glommed_ra <- tax_glom(phylo_2022_mifish, "Taxon.CommonName")
+mifish_df_ra <- subset_samples(phylo_2022_mifish_glommed_ra) 
+mifish_df_ra <- microbiome::transform(mifish_df_ra, transform = "compositional") 
+mifish_df_ra <- psmelt(mifish_df_ra)
+
+# replace zeroes in the table with NA
+
+mifish_df[mifish_df == 0] <- NA
+mifish_df_ra[mifish_df_ra == 0] <- NA
+
+# and remove rows with NAs (so they don't appear as small dots in plot)
+
+mifish_df <-  filter(mifish_df, !is.na(Abundance))
+mifish_df_ra <-  filter(mifish_df_ra, !is.na(Abundance))
+
+# Remove oyster sites not samples for all years
+
+mifish_df <- mifish_df %>%
+  filter(!sites %in% c("35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46"))
+mifish_df_ra <- mifish_df_ra %>%
+  filter(!sites %in% c("35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46"))
+  
+# and view
+
+mifish_df
+mifish_df_ra
+
+### Prepare for plot
+## Remove controls from dataframes
+
+mifish_df <- mifish_df %>% filter(is.na(controls))
+mifish_df_ra <- mifish_df_ra %>% filter(is.na(controls))
+
+#### Sort levels
+# sort station numbers
+
+sitelevels <- as.character(sort(as.numeric(unique(c(mifish_df$sites)))))
+sitelevels
+
+# put east/west in geographic/sensible order (not alphabetic)
+
+mifish_df$Bayside_f= factor(mifish_df$Bayside, levels=c('WEST','EAST'))
+mifish_df_ra$Bayside_f= factor(mifish_df_ra$Bayside, levels=c('WEST','EAST'))
+
+# put months in time/sensible order (not alphabetic)
+
+mifish_df$Month_f= factor(mifish_df$Month, levels=sort(unique(mifish_df$Month)))
+mifish_df_ra$Month_f= factor(mifish_df_ra$Month, levels=sort(unique(mifish_df$Month)))
+
+### Mifish Bubble Plots
+
+## By bayside
+# First average replicates at same sites
+
+mifish_df_bayside <- mifish_df %>%
+    group_by(sites, Bayside_f, `Taxon.CommonName`) %>%
+    dplyr::summarize(Abundance = mean(Abundance))
+mifish_df_bayside
+
+# Subset out tropical species
+
+mifish_df_bayside_tropicals <- mifish_df_bayside %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+mifish_df_bayside_tropicals
+
+# Plot
+
+bubbleplot_mifish_Bayside_tropicals <- ggplot(mifish_df_bayside_tropicals, aes(x = factor(sites, levels = sitelevels), y = fct_rev(`Taxon.CommonName`))) + 
+    geom_point(
+        data = subset(mifish_df_bayside_tropicals, Abundance > 0),
+        aes(size = Abundance, fill = `Taxon.CommonName`),
+        color = "black",
+        pch = 21) +
+    scale_size_area(
+        name   = "Read Abundance",
+        labels = scales::label_scientific()) + 
+    xlab("")+ 
+    ylab("")+
+    labs(size="Read Abundance", fill = "")+ 
+    theme_bw() +
+    scale_fill_manual(values = myColors_Sci_comname)+ theme(axis.title.x=element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 11), axis.text.y = element_text(size = 11), legend.position = "bottom") + guides(fill="none") +
+    facet_grid(~Bayside_f, scales = "free", space = "free", drop= TRUE)
+bubbleplot_mifish_Bayside_tropicals
+
+# Save
+
+ggsave(plot = bubbleplot_mifish_Bayside_tropicals, filename = "/Volumes/NB_2/filtered_eDNA_data/Figures/Tropicals/2022/bubbleplot_mifish_Bayside_tropicals.jpg",
+width = 10, height = 3, units = "in")
+
+
+#### By month
+# First average replicates from same month
+
+mifish_df_month <- mifish_df %>%
+    group_by(sites, Month_f, `Taxon.CommonName`) %>%
+    dplyr::summarize(Abundance = mean(Abundance))
+mifish_df_month
+
+# Subset out tropical species
+
+mifish_df_month_tropicals <- mifish_df_month %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+mifish_df_month_tropicals
+
+# Plot
+
+bubbleplot_mifish_Month_tropicals <- ggplot(mifish_df_month_tropicals, aes(x = factor(sites, levels = sitelevels), y = fct_rev(`Taxon.CommonName`))) +
+    geom_point(
+        data = subset(mifish_df_month_tropicals, Abundance > 0),
+        aes(size = Abundance, fill = `Taxon.CommonName`),
+        color = "black",
+        pch = 21) +
+    scale_size_area(
+        name   = "Read Abundance",
+        labels = scales::label_scientific()) + 
+    xlab("")+ 
+    ylab("")+
+    labs(size="Read Abundance", fill = "")+ 
+    theme_bw() +
+    scale_fill_manual(values = myColors_Sci_comname)+
+    theme(axis.title.x=element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), axis.text.y = element_text(size = 10), legend.position = "bottom") + 
+    guides(fill="none") + 
+    facet_wrap(~Month_f, drop= TRUE, nrow = 1)
+bubbleplot_mifish_Month_tropicals
+
+# Save
+
+ggsave(plot = bubbleplot_mifish_Month_tropicals, filename =
+"/Volumes/NB_2/filtered_eDNA_data/Figures/Tropicals/2022/bubbleplot_mifish_Month_tropicals.jpg", width = 10, height = 3, units = "in")
+
+
+
+#### By month, trawl sites only
+### First average replicates from same month
+
+mifish_df_month_trawl <- mifish_df %>% filter(Habitat == "OPEN WATER") %>% group_by(sites, Month_f, `Taxon.CommonName`) %>% dplyr::summarize(Abundance = mean(Abundance))
+mifish_df_month_trawl
+
+# Subset out tropical species
+
+mifish_df_month_trawl_tropicals <- mifish_df_month_trawl %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+mifish_df_month_trawl_tropicals
+
+# Plot
+
+bubbleplot_mifish_Month_trawlonly_tropicals <- ggplot(mifish_df_month_trawl_tropicals, aes(x = factor(sites, levels = sitelevels), y = fct_rev(`Taxon.CommonName`))) + 
+        geom_point(
+        data = subset(mifish_df_month_trawl_tropicals, Abundance > 0),
+        aes(size = Abundance, fill = `Taxon.CommonName`),
+        color = "black",
+        pch = 21) +
+    scale_size_area(
+        name   = "Read Abundance",
+        labels = scales::label_scientific()) + 
+    xlab("")+ 
+    ylab("")+ 
+    labs(size="Read Abundance", fill = "")+ 
+    theme_bw() + 
+    scale_fill_manual(values = myColors_Sci_comname)+ 
+    theme(axis.title.x=element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 12), axis.text.y = element_text(size = 10), legend.position = "bottom") + 
+    guides(fill="none") + 
+    facet_grid(~Month_f, drop = TRUE, scales = "free", space='free')
+bubbleplot_mifish_Month_trawlonly_tropicals
+
+# Save
+
+ggsave(plot = bubbleplot_mifish_Month_trawlonly_tropicals, filename = "/Volumes/NB_2/filtered_eDNA_data/Figures/Tropicals/2022/bubbleplot_mifish_Month_trawlonly_tropicals.jpg", width = 10, height = 3, units = "in")
+
+
+#### Plot by othet habitat types:
+
+### Clam Sanctuary
+# First average replicates from same month
+
+mifish_df_month_clam <- mifish_df %>% filter(Habitat == "CLAM SANCTUARY") %>% group_by(sites, Month_f, `Taxon.CommonName`) %>% dplyr::summarize(Abundance = mean(Abundance)) 
+mifish_df_month_clam
+
+# Subset out tropical species
+
+mifish_df_month_clam_tropicals <- mifish_df_month_clam %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+mifish_df_month_clam_tropicals
+
+# No tropicals at clam sites
+
+
+### Oyster Reef
+# First average replicates from same month
+
+mifish_df_month_oysterreef <- mifish_df %>% filter(Habitat == "OYSTER REEF") %>% group_by(sites, Month_f, `Taxon.CommonName`) %>% dplyr::summarize(Abundance = mean(Abundance)) 
+mifish_df_month_oysterreef
+
+# Subset out tropical species
+
+mifish_df_month_oysterreef_tropicals <- mifish_df_month_oysterreef %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+mifish_df_month_oysterreef_tropicals
+
+# No tropicals at oyster reefs
+
+
+
+### Diversity
+
+## Species richness by month
+# Subset out tropial species
+
+mifish_df_tropicals <- mifish_df %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+mifish_df_tropicals
+
+# Then define all months and habitats you'd expect
+
+all_months <- unique(c(mifish_df_tropicals$Month))
+
+species_counts_2022_mifish_tropicals <- mifish_df_tropicals %>% group_by(Month) %>% summarise(UniqueSpeciesCount = n_distinct(`Taxon.CommonName`), .groups = "drop") %>% complete(Month = all_months, fill = list(UniqueSpeciesCount = 0))
+
+# Add in zeros for July and October
+
+species_counts_2022_mifish_tropicals <- bind_rows(species_counts_2022_mifish_tropicals, tibble(
+    Month = 7,
+    UniqueSpeciesCount = 0
+))
+species_counts_2022_mifish_tropicals <- bind_rows(species_counts_2022_mifish_tropicals, tibble(
+    Month = 10,
+    UniqueSpeciesCount = 0
+))
+
+# Plot
+
+sp_richnesss_habitat_month_mifish_tropicals_plot <- ggplot(species_counts_2022_mifish_tropicals, aes(x = Month, y = UniqueSpeciesCount)) + 
+geom_line(size = 1, alpha = 0.8) + 
+geom_point(size = 2, alpha = 0.8) + 
+scale_x_continuous(breaks = seq(7, 10, by = 1), limits = c(7, 10)) + 
+scale_y_continuous(breaks = seq(0, 6, by = 2), limits = c(0, 6)) + 
+labs(x = "Month", y = "Species Richness", title = "2022 Species Richness; Tropicals") + 
+theme_minimal() + 
+theme(axis.title = element_text(size = 12), axis.text = element_text(size = 12), legend.title = element_blank() )
+sp_richnesss_habitat_month_mifish_tropicals_plot
+
+
+# Save
+
+ggsave(plot = sp_richnesss_habitat_month_mifish_tropicals_plot, filename = "/Volumes/NB_2/filtered_eDNA_data/Figures/Tropicals/2022/sp_richnesss_habitat_month_mifish_tropicals_plot.jpg", width = 5, height = 4, units = "in")
+
+
+
+## Overall richness by bayside
+
+species_counts_bayside_mifish_tropicals <- mifish_df_bayside_tropicals %>%
+  group_by(Bayside_f) %>%
+  summarise(UniqueSpeciesCount = n_distinct(`Taxon.CommonName`), .groups = "drop")
+species_counts_bayside_mifish_tropicals
+
+# Add in zeros for West
+
+species_counts_bayside_mifish_tropicals <- bind_rows(species_counts_bayside_mifish_tropicals, tibble(
+    Bayside_f = "WEST",
+    UniqueSpeciesCount = 0
+))
+
+# Set a factor so it will plot west before east
+
+species_counts_bayside_mifish_tropicals$Bayside_f <-
+  factor(species_counts_bayside_mifish_tropicals$Bayside_f,
+  levels = c("WEST", "EAST"))
+
+# Plot
+
+species_counts_by_bayside_mifish_tropicals_plot <- 
+ggplot(species_counts_bayside_mifish_tropicals, aes(x = Bayside_f, y = UniqueSpeciesCount)) +
+  geom_bar(stat = "identity", fill = c("cornflowerblue", "coral"), alpha = 0.8) +  
+  labs(x = "", y = "Total Species Richness") +  
+  theme_minimal() 
+species_counts_by_bayside_mifish_tropicals_plot
+
+# Save
+
+ggsave(plot = species_counts_by_bayside_mifish_tropicals_plot, filename = "/Volumes/NB_2/filtered_eDNA_data/Figures/Tropicals/2022/species_counts_by_bayside_mifish_tropicals_plot.jpg", width = 2.5, height = 4, units = "in")
+
+
+
+
+# Relative Abundance
+# Use metagMisc to remove ASV rows with 0 abundance for all positive samples
+
+ps_2022_mifish <- metagMisc::phyloseq_filter_sample_wise_abund_trim( phylo_2022_mifish, minabund = 0, relabund = FALSE)
+
+# Summarize total abundances for each species across the whole dataset
+
+ps2022_mifish_abundance <- data.frame(otu_table(ps_2022_mifish)) %>%
+  rowSums() %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "ASV") %>%
+  rename(TotalAbundance = ".")
+
+# Create a relative abundance project
+
+ps2022_mifish_abundance <- ps2022_mifish_abundance %>%
+  mutate(RelativeAbundance = TotalAbundance / sum(TotalAbundance))
+  
+# Add back taxonomic info
+
+tax_info <- as.data.frame(tax_table(ps_2022_mifish))
+tax_info <- tax_info %>%
+  mutate(ASV = rownames(tax_info))
+  
+ps2022_mifish_abundance <- ps2022_mifish_abundance %>%
+  left_join(tax_info, by = c("ASV" = "ASV"))
+
+# Remove columns no longer relevant
+
+ps2022_mifish_abundance <- ps2022_mifish_abundance[, colSums(!is.na(ps2022_mifish_abundance)) > 0]
+
+# Subset out tropial species
+
+ps2022_mifish_abundance_tropicals <- ps2022_mifish_abundance %>%
+    filter(Taxon.CommonName %in% c(
+        "Chaetodon ocellatus (Spotfin butterflyfish)", 
+        "Sphyraena borealis (Northern sennet)"
+    ))
+ps2022_mifish_abundance_tropicals
+
+# Plot relative abundance
+
+mifish_tropicals_barplot_ra <- ggplot(ps2022_mifish_abundance_tropicals, aes(
+    y = RelativeAbundance,
+    fill = Taxon.CommonName)) +
+    geom_bar(aes(x = "Sample"), stat = "identity", color = "black") +
+    labs(x = NULL, y = "Relative Abundance", fill = NULL) +
+    theme_minimal() +
+    scale_fill_manual(values = myColors_Sci_comname) +
+    guides(fill = guide_legend(ncol = 1)) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+mifish_tropicals_barplot_ra
+
+# Save
+
+ggsave(plot = mifish_tropicals_barplot_ra, filename =
+"/Volumes/NB_2/filtered_eDNA_data/Figures/Tropicals/2022/mifish_tropicals_barplot_ra.jpg",
+width = 6, height = 6, units = "in")
+
+# DONE
